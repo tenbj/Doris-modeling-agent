@@ -1,0 +1,231 @@
+# Doris表结构定义模板
+# 使用YAML格式定义表结构，便于程序化生成DDL
+
+# 表基本信息
+table:
+  database: "{database_name}"  # 数据库名
+  name: "{table_name}"        # 表名
+  layer: "{ODS/DWD/DWS/ADS/DIM}"  # 数据层级
+  comment: "{表的业务说明}"
+  
+# 表模型配置
+model:
+  type: "{DUPLICATE/AGGREGATE/UNIQUE}"  # 表模型类型
+  keys: []  # 键列列表
+    # - column_name1
+    # - column_name2
+
+# 字段定义
+columns:
+  # 业务主键字段
+  - name: "{primary_key_column}"
+    type: "BIGINT"  # 数据类型
+    nullable: false  # 是否允许NULL
+    default: null    # 默认值（如果有）
+    comment: "主键字段说明"
+    is_key: true     # 是否为Key列
+    agg_type: null   # 聚合类型（仅AGGREGATE模型）：SUM/MAX/MIN/REPLACE/BITMAP_UNION/HLL_UNION
+
+  # 维度字段示例
+  - name: "{dimension_column}"
+    type: "VARCHAR(100)"
+    nullable: true
+    default: null
+    comment: "维度字段说明"
+    is_key: false
+    agg_type: "REPLACE"  # AGGREGATE模型下使用REPLACE
+
+  # 度量字段示例
+  - name: "{metric_column}"
+    type: "DECIMAL(18,2)"
+    nullable: true
+    default: 0
+    comment: "度量字段说明"
+    is_key: false
+    agg_type: "SUM"  # AGGREGATE模型下求和
+
+  # 时间字段
+  - name: "data_date"
+    type: "DATE"
+    nullable: false
+    default: null
+    comment: "数据日期/业务日期"
+    is_key: false
+    agg_type: "REPLACE"
+
+  - name: "create_time"
+    type: "DATETIME"
+    nullable: false
+    default: "CURRENT_TIMESTAMP"
+    comment: "创建时间"
+    is_key: false
+    agg_type: "REPLACE"
+
+  # 拉链表字段（仅DIM层需要）
+  # - name: "start_date"
+  #   type: "DATE"
+  #   nullable: false
+  #   default: null
+  #   comment: "生效日期"
+  #   is_key: true  # DIM层必须包含在UNIQUE KEY中
+  #   agg_type: null
+
+  # - name: "end_date"
+  #   type: "DATE"
+  #   nullable: false
+  #   default: "'9999-12-31'"
+  #   comment: "失效日期，当前记录为9999-12-31"
+  #   is_key: false
+  #   agg_type: null
+
+  # - name: "is_current"
+  #   type: "TINYINT"
+  #   nullable: false
+  #   default: 1
+  #   comment: "当前有效标识：1=当前有效，0=历史记录"
+  #   is_key: false
+  #   agg_type: null
+
+# 分区配置
+partition:
+  enabled: true  # 是否分区
+  type: "RANGE"  # 分区类型：RANGE
+  column: "data_date"  # 分区字段
+  granularity: "DAY"  # 分区粒度：DAY/MONTH
+  retention_days: 90  # 数据保留天数（-1表示永久保留）
+  auto_partition: true  # 是否自动分区
+  partitions:  # 预创建分区（如果不使用auto_partition）
+    - name: "p20240101"
+      values_less_than: "'2024-01-02'"
+    - name: "p20240102"
+      values_less_than: "'2024-01-03'"
+
+# 分桶配置
+distribution:
+  type: "HASH"  # 分桶类型：HASH
+  columns:  # 分桶字段
+    - "{bucket_column}"
+  buckets: 10  # 分桶数量
+
+# 表属性
+properties:
+  replication_num: 3  # 副本数
+  storage_format: "DEFAULT"  # 存储格式：DEFAULT/V2
+  compression: "LZ4"  # 压缩算法：LZ4/ZSTD/SNAPPY
+  enable_persistent_index: false  # 是否启用持久化索引
+  bloom_filter_columns: []  # Bloom Filter字段
+    # - column_name
+  colocate_with: null  # Colocation Group名称
+  dynamic_partition:  # 动态分区配置
+    enable: true
+    time_unit: "DAY"  # DAY/WEEK/MONTH
+    start: -7  # 起始偏移（保留最近7天）
+    end: 3    # 结束偏移（提前创建未来3天）
+    prefix: "p"
+    buckets: 10
+
+# 索引配置
+indexes:
+  - name: "{index_name}"
+    type: "BITMAP"  # 索引类型：BITMAP/INVERTED
+    columns:
+      - "{column_name}"
+    comment: "索引说明"
+
+# 数据来源与依赖
+metadata:
+  source_tables:  # 上游数据源
+    - table: "{source_table_1}"
+      type: "ODS/DWD/DIM"
+      join_type: "LEFT JOIN / INNER JOIN / UNION"
+      join_keys:
+        - "{join_column}"
+  
+  target_tables:  # 下游目标表
+    - "{target_table_1}"
+    - "{target_table_2}"
+
+  update_frequency: "DAILY"  # 更新频率：REALTIME/HOURLY/DAILY/WEEKLY/MONTHLY
+  update_type: "INCREMENTAL"  # 更新类型：FULL/INCREMENTAL/SCD2
+  
+  business_owner: "{owner_name}"  # 业务负责人
+  tech_owner: "{developer_name}"  # 技术负责人
+
+# 数据质量规则
+quality_rules:
+  primary_key_unique: true  # 主键唯一性检查
+  not_null_columns:  # 非空字段列表
+    - "{required_column_1}"
+    - "{required_column_2}"
+  
+  row_count_check:  # 数据量检查
+    min_rows: 1000  # 最小行数
+    max_rows: 10000000  # 最大行数
+    daily_growth_rate: 0.1  # 日增长率（10%以内波动正常）
+  
+  value_range_check:  # 值域检查
+    - column: "{numeric_column}"
+      min_value: 0
+      max_value: 100000
+    - column: "{date_column}"
+      min_value: "2020-01-01"
+      max_value: "2030-12-31"
+  
+  enum_check:  # 枚举值检查
+    - column: "{status_column}"
+      valid_values:
+        - "ACTIVE"
+        - "INACTIVE"
+        - "DELETED"
+  
+  scd2_check:  # 拉链表检查（仅DIM层）
+    enabled: false  # 是否启用
+    rules:
+      - "每个维度主键只能有一条is_current=1的记录"
+      - "历史记录的end_date不应为9999-12-31"
+      - "同一主键记录的时间不应重叠"
+      - "有效期应连续（可选）"
+
+# 示例SQL查询
+example_queries:
+  - name: "基础查询"
+    sql: |
+      SELECT *
+      FROM {database_name}.{table_name}
+      WHERE data_date = '2024-01-01'
+      LIMIT 10;
+  
+  - name: "聚合查询"
+    sql: |
+      SELECT
+        {dimension_column},
+        SUM({metric_column}) as total_metric
+      FROM {database_name}.{table_name}
+      WHERE data_date >= '2024-01-01'
+      GROUP BY {dimension_column};
+  
+  - name: "拉链表查询当前记录"
+    sql: |
+      SELECT *
+      FROM {database_name}.{table_name}
+      WHERE is_current = 1;
+  
+  - name: "拉链表查询历史记录"
+    sql: |
+      SELECT *
+      FROM {database_name}.{table_name}
+      WHERE {primary_key} = 123
+        AND '2024-01-15' BETWEEN start_date AND end_date;
+
+# 版本信息
+version:
+  schema_version: "1.0"
+  created_date: "{YYYY-MM-DD}"
+  created_by: "{creator}"
+  last_modified_date: "{YYYY-MM-DD}"
+  last_modified_by: "{modifier}"
+  change_log:
+    - version: "1.0"
+      date: "{YYYY-MM-DD}"
+      changes: "初始版本"
+

@@ -1,0 +1,236 @@
+# Doris数据建模AI Agent系统 - Cursor规则
+
+## 项目说明
+本项目是一个多Agent协作的Apache Doris数据建模模板系统，用于自动化完成从业务需求到SQL代码的全流程数据建模工作。
+
+## 核心工作流程
+当用户请求"开始数据建模"、"执行数据建模"或"运行编排Agent"时，按以下顺序自动执行：
+
+1. **需求分析Agent** → 解析 `docs/business/` 和 `docs/source/` 中的文档
+2. **数据建模Agent** → 设计数据分层模型（ODS/DWD/DWS/ADS/DIM）
+3. **表结构设计Agent** → 生成Doris表结构定义
+4. **SQL生成Agent** → 生成DDL和DML语句
+5. **质量检验Agent** → 设计数据质量检验方案
+
+## 目录结构规范
+
+### 输入目录
+- `docs/business/` - 业务理解文档（业务需求、规则、指标定义等）
+- `docs/source/` - 数据源文档（源表结构、字段说明、数据样例）
+
+### 输出目录
+- `out/design/` - 模型设计方案（Markdown格式）
+- `out/schema/` - 表结构文档（YAML格式）
+- `out/sql/ddl/` - 建表语句（.sql文件）
+- `out/sql/dml/` - 数据更新语句（.sql文件）
+- `out/quality/` - 数据质量检验方案（Markdown格式）
+
+### Agent提示词目录
+- `prompts/01_requirement_analyst.md` - 需求分析Agent
+- `prompts/02_data_modeler.md` - 数据建模Agent
+- `prompts/03_schema_designer.md` - 表结构设计Agent
+- `prompts/04_sql_generator.md` - SQL生成Agent
+- `prompts/05_quality_checker.md` - 质量检验Agent
+- `prompts/orchestrator.md` - 编排Agent（协调多Agent协作）
+
+## Apache Doris SQL语法规范
+
+### 必须遵守的语法要求
+1. **表模型类型**：
+   - DUPLICATE KEY - 明细数据表（适用于ODS、DWD层）
+   - AGGREGATE KEY - 聚合表（适用于DWS层）
+   - UNIQUE KEY - 主键唯一表（适用于DIM维度表）
+
+2. **分区策略**：
+   - 使用RANGE分区，通常按日期字段分区
+   - 语法：`PARTITION BY RANGE(date_column) (...)`
+
+3. **分桶策略**：
+   - 使用HASH分桶
+   - 语法：`DISTRIBUTED BY HASH(column_name) BUCKETS N`
+
+4. **数据类型**：
+   - 整数：TINYINT, SMALLINT, INT, BIGINT
+   - 浮点：FLOAT, DOUBLE, DECIMAL(M,D)
+   - 字符串：CHAR(N), VARCHAR(N), STRING
+   - 日期时间：DATE, DATETIME, TIMESTAMP
+   - 布尔：BOOLEAN
+
+5. **建表语法示例**：
+```sql
+CREATE TABLE IF NOT EXISTS database_name.table_name (
+    column1 INT COMMENT '字段说明',
+    column2 VARCHAR(100) COMMENT '字段说明',
+    column3 DATE COMMENT '日期字段'
+)
+DUPLICATE KEY(column1)
+COMMENT '表说明'
+PARTITION BY RANGE(column3) (
+    PARTITION p20240101 VALUES LESS THAN ('2024-01-02')
+)
+DISTRIBUTED BY HASH(column1) BUCKETS 10
+PROPERTIES (
+    "replication_num" = "3",
+    "storage_format" = "DEFAULT"
+);
+```
+
+## 数据分层规范
+
+### ODS层（Operational Data Store）- 操作数据层
+- **目的**：原始数据接入，保持源系统数据原貌
+- **命名规范**：`ods_源系统名_表名`
+- **表模型**：DUPLICATE KEY
+- **特点**：
+  - 1:1映射源表结构
+  - 添加ETL字段：`etl_date`（数据日期）、`create_time`（入库时间）
+  - 不做业务逻辑处理
+
+### DWD层（Data Warehouse Detail）- 明细数据层
+- **目的**：数据清洗、标准化、整合
+- **命名规范**：`dwd_主题域_表名`
+- **表模型**：DUPLICATE KEY 或 UNIQUE KEY
+- **特点**：
+  - 数据清洗（去重、去空、标准化）
+  - 维度退化
+  - 添加代理键
+  - 业务规则应用
+
+### DWS层（Data Warehouse Summary）- 汇总数据层
+- **目的**：按主题轻度汇总，构建宽表
+- **命名规范**：`dws_主题域_表名`
+- **表模型**：AGGREGATE KEY 或 UNIQUE KEY
+- **特点**：
+  - 按主题汇总
+  - 宽表设计（减少JOIN）
+  - 常用指标预计算
+
+### ADS层（Application Data Service）- 应用数据层
+- **目的**：面向具体业务场景的应用层数据
+- **命名规范**：`ads_应用场景_表名`
+- **表模型**：AGGREGATE KEY
+- **特点**：
+  - 高度聚合
+  - 面向报表/应用
+  - 可以是宽表或指标表
+
+### DIM层（Dimension）- 维度层
+- **目的**：维度数据管理
+- **命名规范**：`dim_维度名`
+- **表模型**：UNIQUE KEY（必须使用拉链表）
+- **特点**：必须包含SCD Type 2拉链表字段（见下节）
+
+## 拉链表设计规范（DIM层必须）
+
+### 必须包含的字段
+所有DIM层维度表必须包含以下三个字段：
+
+1. **start_date**（生效日期）
+   - 类型：DATE
+   - 说明：该记录的生效日期
+   - 示例：'2024-01-01'
+
+2. **end_date**（失效日期）
+   - 类型：DATE
+   - 说明：该记录的失效日期
+   - 当前有效记录值为：'9999-12-31'
+   - 历史记录值为：实际失效日期
+
+3. **is_current**（当前有效标识）
+   - 类型：TINYINT
+   - 说明：标识是否为当前有效记录
+   - 值域：1=当前有效，0=历史记录
+
+### 拉链表建表示例
+```sql
+CREATE TABLE IF NOT EXISTS dim_user (
+    user_id BIGINT COMMENT '用户ID',
+    user_name VARCHAR(100) COMMENT '用户名',
+    user_level VARCHAR(20) COMMENT '用户等级',
+    start_date DATE COMMENT '生效日期',
+    end_date DATE COMMENT '失效日期',
+    is_current TINYINT COMMENT '当前有效标识：1=当前有效，0=历史记录'
+)
+UNIQUE KEY(user_id, start_date)
+COMMENT '用户维度拉链表'
+DISTRIBUTED BY HASH(user_id) BUCKETS 10
+PROPERTIES (
+    "replication_num" = "3"
+);
+```
+
+### 拉链表更新逻辑（DML）
+```sql
+-- 步骤1：关闭变更记录的有效期
+UPDATE dim_user 
+SET end_date = '2024-01-15',
+    is_current = 0
+WHERE user_id IN (SELECT user_id FROM new_data)
+  AND is_current = 1;
+
+-- 步骤2：插入新记录
+INSERT INTO dim_user
+SELECT 
+    user_id,
+    user_name,
+    user_level,
+    '2024-01-16' as start_date,
+    '9999-12-31' as end_date,
+    1 as is_current
+FROM new_data;
+```
+
+## Agent执行要求
+
+### 自动执行流程
+当检测到用户输入包含以下关键词时，自动执行完整流程：
+- "开始数据建模"
+- "执行数据建模"
+- "运行编排Agent"
+- "执行全流程"
+
+### 执行步骤
+1. 读取 `prompts/orchestrator.md` 获取编排规则
+2. 依次执行5个Agent（按`prompts/`目录中01-05的顺序）
+3. 每个Agent执行时：
+   - 读取对应的提示词文件
+   - 读取所需的输入文件
+   - 生成输出到指定目录
+   - 输出文件命名格式：`{层级}_{表名}_{文件类型}_{日期}.{ext}`
+
+### 输出文件格式
+1. **设计方案**：Markdown格式（.md）
+2. **表结构**：YAML格式（.yaml）
+3. **SQL语句**：SQL格式（.sql）
+4. **质量检验**：Markdown格式（.md）
+
+## 质量保证要求
+
+### SQL语法检查
+- 所有生成的SQL必须符合Doris语法
+- 必须包含注释（COMMENT）
+- 字段类型选择合理
+- 分区分桶策略合理
+
+### 拉链表检查
+- DIM层表必须包含start_date、end_date、is_current三个字段
+- UNIQUE KEY必须包含主键+start_date
+- 更新逻辑必须先关闭旧记录再插入新记录
+
+### 输出完整性检查
+- 模型设计方案完整
+- 每张表都有对应的表结构定义
+- 每张表都有DDL和DML语句
+- 质量检验方案覆盖所有表
+
+## 错误处理
+- 如果输入文档不完整，提示用户补充
+- 如果检测到语法错误，自动修正或提示
+- 如果依赖关系不明确，询问用户确认
+
+## 特殊说明
+- 所有SQL代码必须使用UTF-8编码
+- 日期格式统一使用：'YYYY-MM-DD'
+- 时间戳格式统一使用：'YYYY-MM-DD HH:MI:SS'
+- 表名、字段名使用小写+下划线命名法
+
