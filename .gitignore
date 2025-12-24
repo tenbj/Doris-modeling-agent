@@ -42,3 +42,10 @@ Thumbs.db
 *.bak
 *.cache
 
+# Local Git helper scripts (本地Git辅助脚本)
+git_commit.bat
+git_push.bat
+git_update.bat
+Git脚本使用说明.md
+如何提交到GitHub.md
+
